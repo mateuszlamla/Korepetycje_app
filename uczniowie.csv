@@ -1,0 +1,3 @@
+ID,Imie,Nazwisko,H_w_tygodniu,Stawka,Nieobecnosci,Odrabiania,Do_odrobienia_umowione,Do_odrobienia_nieumowione,Szkola,Klasa,Poziom,Nr_tel,Data_rozp,Data_zak,Dzien_tyg,Godzina,Adres,Tryb_platnosci
+1,Mateusz,Lamla,1,80,0,0.0,0.0,0.0,Technikum,5.0,Rozszerzony,123456789.0,2025-09-01,2026-05-01,Wtorek,17:00:00,abc,Co zajęcia
+2,Marek,asd,1,80,0,0.0,,,,,,,2026-02-09,2026-06-26,Poniedziałek,16:00:00,,Miesięcznie
