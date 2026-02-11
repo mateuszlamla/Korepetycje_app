@@ -6,15 +6,20 @@ from datetime import datetime, timedelta, date, time
 from dateutil.relativedelta import relativedelta
 from streamlit_calendar import calendar
 from st_supabase_connection import SupabaseConnection
+from supabase import create_client, Client
+import httpx
 
-conn = st.connection(
-    "supabase",
-    type=SupabaseConnection,
-    url=st.secrets["connections"]["supabase"]["url"],
-    key=st.secrets["connections"]["supabase"]["key"]
-)
+# Alternatywny sposób połączenia z wyłączonym HTTP/2
+@st.cache_resource
+def get_supabase_client():
+    url = st.secrets["connections"]["supabase"]["url"]
+    key = st.secrets["connections"]["supabase"]["key"]
+    # Wymuszamy HTTP/1.1 przez własny httpx.Client
+    http_client = httpx.Client(http2=False)
+    return create_client(url, key, options=httpx.Client(http2=False))
 
-conn.client.options.http_client_timeout = 10
+# Używaj tego klienta zamiast st.connection jeśli błędy nie ustąpią
+supabase_client = get_supabase_client()
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Menedżer Korepetycji", layout="wide", page_icon="📚")
@@ -54,7 +59,7 @@ MIESIACE_PL = {
 # --- NOWE FUNKCJE ŁADOWANIA DANYCH (SUPABASE) ---
 
 def load_data():
-    res = conn.table("uczniowie").select("*").execute()
+    res = supabase_client.table("uczniowie").select("*").execute()
     df = pd.DataFrame(res.data)
     if df.empty: return pd.DataFrame(columns=COLUMNS)
     # Konwersja typów dla stabilności obliczeń
@@ -66,35 +71,35 @@ def load_data():
 
 def save_data(df):
     data = df.to_dict(orient='records')
-    conn.table("uczniowie").upsert(data).execute()
+    supabase_client.table("uczniowie").upsert(data).execute()
 
 def load_settlements():
-    res = conn.table("rozliczenia").select("*").execute()
+    res = supabase_client.table("rozliczenia").select("*").execute()
     return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_SETTLEMENTS)
 
 def save_settlements(df):
-    conn.table("rozliczenia").upsert(df.to_dict(orient='records')).execute()
+    supabase_client.table("rozliczenia").upsert(df.to_dict(orient='records')).execute()
 
 def load_cancellations():
-    res = conn.table("odwolane").select("*").execute()
+    res = supabase_client.table("odwolane").select("*").execute()
     return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_CANCELLATIONS)
 
 def save_cancellations(df):
-    conn.table("odwolane").upsert(df.to_dict(orient='records')).execute()
+    supabase_client.table("odwolane").upsert(df.to_dict(orient='records')).execute()
 
 def load_extra():
-    res = conn.table("dodatkowe").select("*").execute()
+    res = supabase_client.table("dodatkowe").select("*").execute()
     return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_EXTRA)
 
 def save_extra(df):
-    conn.table("dodatkowe").upsert(df.to_dict(orient='records')).execute()
+    supabase_client.table("dodatkowe").upsert(df.to_dict(orient='records')).execute()
 
 def load_schedule():
-    res = conn.table("harmonogram").select("*").execute()
+    res = supabase_client.table("harmonogram").select("*").execute()
     return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_SCHEDULE)
 
 def save_schedule(df):
-    conn.table("harmonogram").upsert(df.to_dict(orient='records')).execute()
+    supabase_client.table("harmonogram").upsert(df.to_dict(orient='records')).execute()
 
 # --- LOGIKA MIGRACJI I POMOCNICZA ---
 def parse_student_terms_legacy(row):
