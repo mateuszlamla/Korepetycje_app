@@ -9,14 +9,21 @@ from st_supabase_connection import SupabaseConnection
 from supabase import create_client, Client, ClientOptions
 import httpx
 
+os.environ["HTTPX_HTTP2"] = "false"
+
+from supabase import create_client, ClientOptions
+from datetime import datetime, timedelta, date, time
+from dateutil.relativedelta import relativedelta
+from streamlit_calendar import calendar
+
+# --- KONFIGURACJA POŁĄCZENIA ---
 @st.cache_resource
 def get_supabase_client():
     url = st.secrets["connections"]["supabase"]["url"]
     key = st.secrets["connections"]["supabase"]["key"]
     
-    # Rozwiązujemy problem 'Server disconnected' przez wyłączenie HTTP/2
-    # Przekazujemy klienta HTTP wewnątrz obiektu ClientOptions
-    opts = ClientOptions(http_client=httpx.Client(http2=False))
+    # Ustawiamy tylko dłuższy czas oczekiwania (timeout), co zwiększa stabilność
+    opts = ClientOptions(postgrest_client_timeout=20)
     
     return create_client(url, key, options=opts)
 
