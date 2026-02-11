@@ -5,6 +5,14 @@ import altair as alt
 from datetime import datetime, timedelta, date, time
 from dateutil.relativedelta import relativedelta
 from streamlit_calendar import calendar
+from st_supabase_connection import SupabaseConnection
+
+conn = st.connection(
+    "supabase",
+    type=SupabaseConnection,
+    url=st.secrets["connections"]["supabase"]["url"],
+    key=st.secrets["connections"]["supabase"]["key"]
+)
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Menedżer Korepetycji", layout="wide", page_icon="📚")
@@ -41,77 +49,50 @@ MIESIACE_PL = {
     7: 'Lipiec', 8: 'Sierpień', 9: 'Wrzesień', 10: 'Październik', 11: 'Listopad', 12: 'Grudzień'
 }
 
-# --- FUNKCJE ŁADOWANIA DANYCH ---
-def load_data():
-    if not os.path.exists(FILE_DB): return pd.DataFrame(columns=COLUMNS)
-    try:
-        df = pd.read_csv(FILE_DB)
-        if 'Tryb_platnosci' not in df.columns: df['Tryb_platnosci'] = 'Co zajęcia'
-        df['Stawka'] = pd.to_numeric(df['Stawka'], errors='coerce').fillna(0)
-        df['Dojazd'] = pd.to_numeric(df.get('Dojazd', 0), errors='coerce').fillna(0)
-        df['H_w_tygodniu'] = df['H_w_tygodniu'].astype(str).replace('nan', '1.0')
-        cols_int = ['Odrabiania', 'Nieobecnosci', 'Do_odrobienia_umowione', 'Do_odrobienia_nieumowione']
-        for c in cols_int:
-            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
-        text_cols = ['Szkola', 'Klasa', 'Poziom', 'Nr_tel', 'Adres', 'Dzien_tyg', 'Godzina']
-        for col in text_cols:
-            if col in df.columns:
-                df[col] = df[col].fillna("-")
-        return df
-    except: return pd.DataFrame(columns=COLUMNS)
+# --- NOWE FUNKCJE ŁADOWANIA DANYCH (SUPABASE) ---
 
-def save_data(df): df.to_csv(FILE_DB, index=False)
+def load_data():
+    res = conn.table("uczniowie").select("*").execute()
+    df = pd.DataFrame(res.data)
+    if df.empty: return pd.DataFrame(columns=COLUMNS)
+    # Konwersja typów dla stabilności obliczeń
+    cols_num = ['Stawka', 'Dojazd', 'Odrabiania', 'Nieobecnosci', 'Do_odrobienia_umowione', 'Do_odrobienia_nieumowione']
+    for c in cols_num:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
+    return df
+
+def save_data(df):
+    data = df.to_dict(orient='records')
+    conn.table("uczniowie").upsert(data).execute()
 
 def load_settlements():
-    if not os.path.exists(FILE_SETTLEMENTS): return pd.DataFrame(columns=COLUMNS_SETTLEMENTS)
-    try:
-        df = pd.read_csv(FILE_SETTLEMENTS)
-        if 'Miesiac' in df.columns: df.rename(columns={'Miesiac': 'Okres'}, inplace=True)
-        if 'Zaplacono' in df.columns and 'Wplacono' not in df.columns:
-            if 'Kwota' in df.columns: df.rename(columns={'Kwota': 'Kwota_Wymagana'}, inplace=True)
-            df['Wplacono'] = 0.0
-            df.loc[df['Zaplacono'] == True, 'Wplacono'] = df['Kwota_Wymagana']
-            df.drop(columns=['Zaplacono'], inplace=True, errors='ignore')
-        for col in COLUMNS_SETTLEMENTS:
-            if col not in df.columns: df[col] = 0.0 if col in ['Kwota_Wymagana', 'Wplacono'] else ""
-        return df
-    except: return pd.DataFrame(columns=COLUMNS_SETTLEMENTS)
+    res = conn.table("rozliczenia").select("*").execute()
+    return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_SETTLEMENTS)
 
-def save_settlements(df): df.to_csv(FILE_SETTLEMENTS, index=False)
+def save_settlements(df):
+    conn.table("rozliczenia").upsert(df.to_dict(orient='records')).execute()
 
 def load_cancellations():
-    if not os.path.exists(FILE_CANCELLATIONS): return pd.DataFrame(columns=COLUMNS_CANCELLATIONS)
-    try:
-        df = pd.read_csv(FILE_CANCELLATIONS)
-        if 'Powod' not in df.columns: df['Powod'] = 'Nieznany'
-        return df
-    except: return pd.DataFrame(columns=COLUMNS_CANCELLATIONS)
+    res = conn.table("odwolane").select("*").execute()
+    return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_CANCELLATIONS)
 
-def save_cancellations(df): df.to_csv(FILE_CANCELLATIONS, index=False)
+def save_cancellations(df):
+    conn.table("odwolane").upsert(df.to_dict(orient='records')).execute()
 
 def load_extra():
-    if not os.path.exists(FILE_EXTRA): return pd.DataFrame(columns=COLUMNS_EXTRA)
-    try:
-        df = pd.read_csv(FILE_EXTRA)
-        if 'Typ' not in df.columns: df['Typ'] = 'Dodatkowa'
-        if 'Czas' not in df.columns: df['Czas'] = 1.0 
-        if 'Status' not in df.columns: df['Status'] = 'Zaplanowana'
-        return df
-    except: return pd.DataFrame(columns=COLUMNS_EXTRA)
+    res = conn.table("dodatkowe").select("*").execute()
+    return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_EXTRA)
 
-def save_extra(df): df.to_csv(FILE_EXTRA, index=False)
+def save_extra(df):
+    conn.table("dodatkowe").upsert(df.to_dict(orient='records')).execute()
 
 def load_schedule():
-    if not os.path.exists(FILE_SCHEDULE): return pd.DataFrame(columns=COLUMNS_SCHEDULE)
-    try:
-        df = pd.read_csv(FILE_SCHEDULE)
-        df['Czas_trwania'] = pd.to_numeric(df['Czas_trwania'], errors='coerce').fillna(1.0)
-        if 'Stawka' not in df.columns: df['Stawka'] = 0.0
-        df['Stawka'] = pd.to_numeric(df['Stawka'], errors='coerce').fillna(0.0)
-        return df
-    except: return pd.DataFrame(columns=COLUMNS_SCHEDULE)
+    res = conn.table("harmonogram").select("*").execute()
+    return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_SCHEDULE)
 
-def save_schedule(df): df.to_csv(FILE_SCHEDULE, index=False)
+def save_schedule(df):
+    conn.table("harmonogram").upsert(df.to_dict(orient='records')).execute()
 
 # --- LOGIKA MIGRACJI I POMOCNICZA ---
 def parse_student_terms_legacy(row):

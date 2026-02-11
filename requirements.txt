@@ -1,0 +1,6 @@
+streamlit
+pandas
+altair
+python-dateutil
+streamlit-calendar
+st-supabase-connection
