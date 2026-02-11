@@ -1,114 +1,128 @@
+import os
+# WYMUSZENIE HTTP/1.1 (Musi być na samej górze!)
+os.environ["HTTPX_HTTP2"] = "false"
+
 import streamlit as st
 import pandas as pd
-import os
 import altair as alt
 from datetime import datetime, timedelta, date, time
 from dateutil.relativedelta import relativedelta
 from streamlit_calendar import calendar
-from st_supabase_connection import SupabaseConnection
-from supabase import create_client, Client, ClientOptions
-import httpx
-
-os.environ["HTTPX_HTTP2"] = "false"
-
 from supabase import create_client, ClientOptions
-from datetime import datetime, timedelta, date, time
-from dateutil.relativedelta import relativedelta
-from streamlit_calendar import calendar
-
-# --- KONFIGURACJA POŁĄCZENIA ---
-@st.cache_resource
-def get_supabase_client():
-    url = st.secrets["connections"]["supabase"]["url"]
-    key = st.secrets["connections"]["supabase"]["key"]
-    
-    # Ustawiamy tylko dłuższy czas oczekiwania (timeout), co zwiększa stabilność
-    opts = ClientOptions(postgrest_client_timeout=20)
-    
-    return create_client(url, key, options=opts)
-
-supabase_client = get_supabase_client()
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Menedżer Korepetycji", layout="wide", page_icon="📚")
 
-# --- PLIKI DANYCH ---
-FILE_DB = 'uczniowie.csv'
-FILE_SETTLEMENTS = 'rozliczenia.csv'
-FILE_CANCELLATIONS = 'odwolane.csv'
-FILE_EXTRA = 'dodatkowe.csv'
-FILE_SCHEDULE = 'harmonogram.csv'
+# --- POŁĄCZENIE Z SUPABASE Z ZABEZPIECZENIAMI ---
+@st.cache_resource
+def get_supabase_client():
+    try:
+        url = st.secrets["connections"]["supabase"]["url"]
+        key = st.secrets["connections"]["supabase"]["key"]
+        # Timeout 20 sekund daje bazie czas na odpowiedź
+        opts = ClientOptions(postgrest_client_timeout=20)
+        return create_client(url, key, options=opts)
+    except Exception as e:
+        st.error(f"Nie udało się połączyć z bazą: {e}")
+        st.stop()
+
+supabase = get_supabase_client()
 
 # Definicja kolumn
 COLUMNS = [
-    'ID', 'Imie', 'Nazwisko', 'H_w_tygodniu', 'Stawka', 
-    'Dojazd',
+    'ID', 'Imie', 'Nazwisko', 'H_w_tygodniu', 'Stawka', 'Dojazd',
     'Nieobecnosci', 'Odrabiania', 'Do_odrobienia_umowione', 'Do_odrobienia_nieumowione',
     'Szkola', 'Klasa', 'Poziom', 'Nr_tel', 
-    'Data_rozp', 'Data_zak', 'Dzien_tyg', 'Godzina', 'Adres',
-    'Tryb_platnosci'
+    'Data_rozp', 'Data_zak', 'Dzien_tyg', 'Godzina', 'Adres', 'Tryb_platnosci'
 ]
 COLUMNS_SETTLEMENTS = ['Uczen_ID', 'Okres', 'Kwota_Wymagana', 'Wplacono']
 COLUMNS_CANCELLATIONS = ['Uczen_ID', 'Data', 'Powod']
-# Dodajemy kolumnę 'Status' do śledzenia czy odrabianie zostało już "zaliczone" (minął termin)
 COLUMNS_EXTRA = ['Uczen_ID', 'Data', 'Godzina', 'Stawka', 'Typ', 'Czas', 'Status']
 COLUMNS_SCHEDULE = ['Uczen_ID', 'Dzien_tyg', 'Godzina', 'Czas_trwania', 'Data_od', 'Data_do', 'Stawka']
 
-# Mapowanie dni tygodnia
-DNI_MAPA = {
-    "Poniedziałek": 0, "Wtorek": 1, "Środa": 2, "Czwartek": 3, 
-    "Piątek": 4, "Sobota": 5, "Niedziela": 6
-}
-MIESIACE_PL = {
-    1: 'Styczeń', 2: 'Luty', 3: 'Marzec', 4: 'Kwiecień', 5: 'Maj', 6: 'Czerwiec',
-    7: 'Lipiec', 8: 'Sierpień', 9: 'Wrzesień', 10: 'Październik', 11: 'Listopad', 12: 'Grudzień'
-}
+# Stałe
+DNI_MAPA = {"Poniedziałek": 0, "Wtorek": 1, "Środa": 2, "Czwartek": 3, "Piątek": 4, "Sobota": 5, "Niedziela": 6}
+MIESIACE_PL = {1: 'Styczeń', 2: 'Luty', 3: 'Marzec', 4: 'Kwiecień', 5: 'Maj', 6: 'Czerwiec',
+               7: 'Lipiec', 8: 'Sierpień', 9: 'Wrzesień', 10: 'Październik', 11: 'Listopad', 12: 'Grudzień'}
 
-# --- NOWE FUNKCJE ŁADOWANIA DANYCH (SUPABASE) ---
+# --- FUNKCJE ŁADOWANIA DANYCH (Z RETRY I CACHE) ---
 
+# Funkcja pomocnicza do bezpiecznego pobierania
+@retry(stop=stop_after_attempt(5), wait=wait_fixed(2))
+def fetch_table(table_name):
+    return supabase.table(table_name).select("*").execute()
+
+def clear_cache():
+    """Czyści pamięć podręczną po zapisie danych"""
+    st.cache_data.clear()
+
+@st.cache_data(ttl=60)
 def load_data():
-    res = supabase_client.table("uczniowie").select("*").execute()
-    df = pd.DataFrame(res.data)
-    if df.empty: return pd.DataFrame(columns=COLUMNS)
-    # Konwersja typów dla stabilności obliczeń
-    cols_num = ['Stawka', 'Dojazd', 'Odrabiania', 'Nieobecnosci', 'Do_odrobienia_umowione', 'Do_odrobienia_nieumowione']
-    for c in cols_num:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
-    return df
+    try:
+        res = fetch_table("uczniowie")
+        df = pd.DataFrame(res.data)
+        if df.empty: return pd.DataFrame(columns=COLUMNS)
+        
+        # Konwersja typów
+        cols_num = ['Stawka', 'Dojazd', 'Odrabiania', 'Nieobecnosci', 'Do_odrobienia_umowione', 'Do_odrobienia_nieumowione']
+        for c in cols_num:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0.0)
+        return df
+    except Exception as e:
+        # Jeśli mimo prób się nie uda, zwróć pustą ramkę, żeby apka nie padła
+        print(f"Błąd ładowania uczniów: {e}")
+        return pd.DataFrame(columns=COLUMNS)
 
 def save_data(df):
     data = df.to_dict(orient='records')
-    supabase_client.table("uczniowie").upsert(data).execute()
+    supabase.table("uczniowie").upsert(data).execute()
+    clear_cache() # Odśwież widok
 
+@st.cache_data(ttl=60)
 def load_settlements():
-    res = supabase_client.table("rozliczenia").select("*").execute()
-    return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_SETTLEMENTS)
+    try:
+        res = fetch_table("rozliczenia")
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_SETTLEMENTS)
+    except: return pd.DataFrame(columns=COLUMNS_SETTLEMENTS)
 
 def save_settlements(df):
-    supabase_client.table("rozliczenia").upsert(df.to_dict(orient='records')).execute()
+    supabase.table("rozliczenia").upsert(df.to_dict(orient='records')).execute()
+    clear_cache()
 
+@st.cache_data(ttl=60)
 def load_cancellations():
-    res = supabase_client.table("odwolane").select("*").execute()
-    return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_CANCELLATIONS)
+    try:
+        res = fetch_table("odwolane")
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_CANCELLATIONS)
+    except: return pd.DataFrame(columns=COLUMNS_CANCELLATIONS)
 
 def save_cancellations(df):
-    supabase_client.table("odwolane").upsert(df.to_dict(orient='records')).execute()
+    supabase.table("odwolane").upsert(df.to_dict(orient='records')).execute()
+    clear_cache()
 
+@st.cache_data(ttl=60)
 def load_extra():
-    res = supabase_client.table("dodatkowe").select("*").execute()
-    return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_EXTRA)
+    try:
+        res = fetch_table("dodatkowe")
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_EXTRA)
+    except: return pd.DataFrame(columns=COLUMNS_EXTRA)
 
 def save_extra(df):
-    supabase_client.table("dodatkowe").upsert(df.to_dict(orient='records')).execute()
+    supabase.table("dodatkowe").upsert(df.to_dict(orient='records')).execute()
+    clear_cache()
 
+@st.cache_data(ttl=60)
 def load_schedule():
-    res = supabase_client.table("harmonogram").select("*").execute()
-    return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_SCHEDULE)
+    try:
+        res = fetch_table("harmonogram")
+        return pd.DataFrame(res.data) if res.data else pd.DataFrame(columns=COLUMNS_SCHEDULE)
+    except: return pd.DataFrame(columns=COLUMNS_SCHEDULE)
 
 def save_schedule(df):
-    supabase_client.table("harmonogram").upsert(df.to_dict(orient='records')).execute()
-
+    supabase.table("harmonogram").upsert(df.to_dict(orient='records')).execute()
+    clear_cache()
 # --- LOGIKA MIGRACJI I POMOCNICZA ---
 def parse_student_terms_legacy(row):
     days = str(row['Dzien_tyg']).split(';')
