@@ -6,20 +6,21 @@ from datetime import datetime, timedelta, date, time
 from dateutil.relativedelta import relativedelta
 from streamlit_calendar import calendar
 from st_supabase_connection import SupabaseConnection
-from supabase import create_client, Client
+from supabase import create_client, Client, ClientOptions
 import httpx
 
-# Alternatywny sposób połączenia z wyłączonym HTTP/2
 @st.cache_resource
 def get_supabase_client():
     url = st.secrets["connections"]["supabase"]["url"]
     key = st.secrets["connections"]["supabase"]["key"]
-    # Wymuszamy HTTP/1.1 przez własny httpx.Client
-    http_client = httpx.Client(http2=False)
-    return create_client(url, key, options=httpx.Client(http2=False))
+    
+    # Rozwiązujemy problem 'Server disconnected' przez wyłączenie HTTP/2
+    # Przekazujemy klienta HTTP wewnątrz obiektu ClientOptions
+    opts = ClientOptions(http_client=httpx.Client(http2=False))
+    
+    return create_client(url, key, options=opts)
 
-# Używaj tego klienta zamiast st.connection jeśli błędy nie ustąpią
-supabase_client = get_supabase_client()
+supabase = get_supabase_client()
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Menedżer Korepetycji", layout="wide", page_icon="📚")
