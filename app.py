@@ -1,6 +1,4 @@
 import os
-# WYMUSZENIE HTTP/1.1 (Naprawia błąd 'Server disconnected' na Streamlit Cloud)
-# Ta linia musi być na samej górze, przed importem bibliotek sieciowych
 os.environ["HTTPX_HTTP2"] = "false"
 
 import streamlit as st
@@ -14,6 +12,32 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Menedżer Korepetycji", layout="wide", page_icon="📚")
+
+def check_password():
+    """Zwraca True jeśli użytkownik jest zalogowany."""
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if st.session_state["password_correct"]:
+        return True
+
+    # Formularz logowania
+    st.markdown("## 🔒 Zaloguj się")
+    password = st.text_input("Hasło", type="password")
+    
+    if st.button("Zaloguj"):
+        # Sprawdzamy hasło z sekretów
+        if password == st.secrets["general"]["password"]:
+            st.session_state["password_correct"] = True
+            st.rerun()
+        else:
+            st.error("Nieprawidłowe hasło")
+            
+    return False
+
+# JEŚLI NIE ZALOGOWANY -> STOP (Nie ładuj reszty aplikacji)
+if not check_password():
+    st.stop()
 
 # --- POŁĄCZENIE Z SUPABASE Z ZABEZPIECZENIAMI ---
 @st.cache_resource
