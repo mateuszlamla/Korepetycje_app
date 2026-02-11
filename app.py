@@ -14,7 +14,7 @@ FILE_DB = 'uczniowie.csv'
 FILE_SETTLEMENTS = 'rozliczenia.csv'
 FILE_CANCELLATIONS = 'odwolane.csv'
 FILE_EXTRA = 'dodatkowe.csv'
-FILE_SCHEDULE = 'harmonogram.csv' # NOWY PLIK: Historia zmian planu
+FILE_SCHEDULE = 'harmonogram.csv'
 
 # Definicja kolumn
 COLUMNS = [
@@ -29,8 +29,7 @@ COLUMNS_SETTLEMENTS = ['Uczen_ID', 'Okres', 'Kwota_Wymagana', 'Wplacono']
 COLUMNS_CANCELLATIONS = ['Uczen_ID', 'Data', 'Powod']
 # Dodajemy kolumnę 'Status' do śledzenia czy odrabianie zostało już "zaliczone" (minął termin)
 COLUMNS_EXTRA = ['Uczen_ID', 'Data', 'Godzina', 'Stawka', 'Typ', 'Czas', 'Status']
-# Nowa struktura harmonogramu
-COLUMNS_SCHEDULE = ['Uczen_ID', 'Dzien_tyg', 'Godzina', 'Czas_trwania', 'Data_od', 'Data_do']
+COLUMNS_SCHEDULE = ['Uczen_ID', 'Dzien_tyg', 'Godzina', 'Czas_trwania', 'Data_od', 'Data_do', 'Stawka']
 
 # Mapowanie dni tygodnia
 DNI_MAPA = {
@@ -107,12 +106,14 @@ def load_schedule():
     try:
         df = pd.read_csv(FILE_SCHEDULE)
         df['Czas_trwania'] = pd.to_numeric(df['Czas_trwania'], errors='coerce').fillna(1.0)
+        if 'Stawka' not in df.columns: df['Stawka'] = 0.0
+        df['Stawka'] = pd.to_numeric(df['Stawka'], errors='coerce').fillna(0.0)
         return df
     except: return pd.DataFrame(columns=COLUMNS_SCHEDULE)
 
 def save_schedule(df): df.to_csv(FILE_SCHEDULE, index=False)
 
-# --- LOGIKA PARSOWANIA STARYCH TERMINÓW (Dla migracji) ---
+# --- LOGIKA MIGRACJI I POMOCNICZA ---
 def parse_student_terms_legacy(row):
     days = str(row['Dzien_tyg']).split(';')
     times = str(row['Godzina']).split(';')
@@ -120,7 +121,7 @@ def parse_student_terms_legacy(row):
     terms = []
     for i, day in enumerate(days):
         day = day.strip()
-        if not day or day == '-' or day == 'nan': continue
+        if not day or day == '-': continue
         time_str = times[i].strip() if i < len(times) else (times[-1].strip() if times else "00:00")
         try:
             dur_str = durations[i].strip() if i < len(durations) else (durations[-1].strip() if durations else "1.0")
@@ -129,9 +130,7 @@ def parse_student_terms_legacy(row):
         terms.append({'day_name': day, 'time_str': time_str, 'duration': dur_val})
     return terms
 
-# --- AUTOMATYCZNA MIGRACJA DANYCH ---
 def check_and_migrate_schedule(df_students):
-    # Jeśli plik harmonogramu nie istnieje lub jest pusty, a mamy uczniów -> tworzymy go
     if not os.path.exists(FILE_SCHEDULE) or (os.path.exists(FILE_SCHEDULE) and os.stat(FILE_SCHEDULE).st_size == 0):
         if not df_students.empty:
             new_rows = []
@@ -144,7 +143,8 @@ def check_and_migrate_schedule(df_students):
                         'Godzina': t['time_str'],
                         'Czas_trwania': t['duration'],
                         'Data_od': s_row['Data_rozp'],
-                        'Data_do': s_row['Data_zak']
+                        'Data_do': s_row['Data_zak'],
+                        'Stawka': s_row['Stawka']
                     })
             if new_rows:
                 df_sch = pd.DataFrame(new_rows, columns=COLUMNS_SCHEDULE)
@@ -153,7 +153,6 @@ def check_and_migrate_schedule(df_students):
                 return True
     return False
 
-# --- LOGIKA AUTOMATYCZNEJ AKTUALIZACJI LICZNIKÓW ODRABIANIA ---
 def process_past_makeups(df_students, df_extra):
     today = date.today()
     changes = False
@@ -179,21 +178,36 @@ def process_past_makeups(df_students, df_extra):
         return True
     return False
 
-# --- GŁÓWNA LOGIKA KALENDARZA I FINANSÓW (OPARTA NA HARMONOGRAMIE) ---
+def parse_student_terms(row):
+    days = str(row['Dzien_tyg']).split(';')
+    times = str(row['Godzina']).split(';')
+    durations = str(row['H_w_tygodniu']).split(';')
+    terms = []
+    for i, day in enumerate(days):
+        day = day.strip()
+        if not day or day == '-': continue
+        time_str = times[i].strip() if i < len(times) else (times[-1].strip() if times else "00:00")
+        try:
+            dur_str = durations[i].strip() if i < len(durations) else (durations[-1].strip() if durations else "1.0")
+            dur_val = float(dur_str)
+        except: dur_val = 1.0
+        terms.append({'day_name': day, 'time_str': time_str, 'duration': dur_val})
+    return terms
+
+# --- GŁÓWNA LOGIKA KALENDARZA I FINANSÓW ---
 
 def get_lessons_in_period(df_students, start_date, end_date):
+    """Zwraca listę lekcji (stałych i dodatkowych) w zadanym okresie, uwzględniając WSZYSTKIE odwołania (do Kalendarza i listy)."""
     lessons = []
     df_cancel = load_cancellations()
     df_extra = load_extra()
-    df_schedule = load_schedule() # Ładujemy harmonogram
+    df_schedule = load_schedule()
     
     cancelled_set = set()
     if not df_cancel.empty:
         for _, row in df_cancel.iterrows():
             cancelled_set.add((row['Uczen_ID'], str(row['Data'])))
 
-    # 1. Generowanie lekcji stałych z HARMONOGRAMU
-    # Optymalizacja: mapowanie ucznia
     student_map = df_students.set_index('ID').to_dict('index')
     
     current_day = start_date
@@ -209,12 +223,13 @@ def get_lessons_in_period(df_students, start_date, end_date):
                     
                     if s_valid_start <= current_day <= s_valid_end:
                         uid = sch_row['Uczen_ID']
-                        if uid in student_map: # Jeśli uczeń nadal istnieje
+                        if uid in student_map: 
                             if (uid, current_day_str) not in cancelled_set:
                                 s_info = student_map[uid]
                                 dur = float(sch_row['Czas_trwania'])
-                                # Koszt = (Stawka godzinowa * czas) + dojazd
-                                full_rate = (s_info['Stawka'] * dur) + s_info.get('Dojazd', 0)
+                                sch_rate = float(sch_row.get('Stawka', 0))
+                                hourly_rate = sch_rate if sch_rate > 0 else s_info['Stawka']
+                                full_rate = (hourly_rate * dur) + s_info.get('Dojazd', 0)
                                 
                                 lessons.append({
                                     'Data': current_day, 'Uczen_ID': uid, 'Stawka': full_rate, 
@@ -223,10 +238,8 @@ def get_lessons_in_period(df_students, start_date, end_date):
                                     'Typ': 'Stała', 'Czas': dur
                                 })
                 except: pass
-                
         current_day += timedelta(days=1)
 
-    # 2. Dodatkowe (Bez zmian)
     if not df_extra.empty:
         for _, row in df_extra.iterrows():
             try:
@@ -246,8 +259,58 @@ def get_lessons_in_period(df_students, start_date, end_date):
             
     return lessons
 
-def calculate_income(df_students, start_date, end_date):
-    lessons = get_lessons_in_period(df_students, start_date, end_date)
+def get_predicted_lessons(df_students, start_date, end_date):
+    """
+    Zwraca listę lekcji do PLANU finansowego.
+    ZASADA: Liczymy lekcje stałe, nawet jeśli odwołane (chyba że Święto/Edycja). NIE liczymy dodatkowych.
+    """
+    lessons = []
+    df_cancel = load_cancellations()
+    df_schedule = load_schedule()
+    
+    # Wykluczamy TYLKO te odwołane z powodu "Święto" lub "Edycja"
+    excluded_set = set()
+    if not df_cancel.empty:
+        ex_recs = df_cancel[df_cancel['Powod'].astype(str).str.contains("Święto|Edycja")]
+        for _, r in ex_recs.iterrows():
+            excluded_set.add((r['Uczen_ID'], str(r['Data'])))
+            
+    student_map = df_students.set_index('ID').to_dict('index')
+    
+    current_day = start_date
+    while current_day <= end_date:
+        weekday_num = current_day.weekday()
+        current_day_str = str(current_day)
+        
+        for _, sch_row in df_schedule.iterrows():
+            if DNI_MAPA.get(sch_row['Dzien_tyg']) == weekday_num:
+                try:
+                    s_valid_start = pd.to_datetime(sch_row['Data_od']).date()
+                    s_valid_end = pd.to_datetime(sch_row['Data_do']).date()
+                    
+                    if s_valid_start <= current_day <= s_valid_end:
+                        uid = sch_row['Uczen_ID']
+                        if uid in student_map:
+                            if (uid, current_day_str) not in excluded_set:
+                                s_info = student_map[uid]
+                                dur = float(sch_row['Czas_trwania'])
+                                sch_rate = float(sch_row.get('Stawka', 0))
+                                hourly_rate = sch_rate if sch_rate > 0 else s_info['Stawka']
+                                full_rate = (hourly_rate * dur) + s_info.get('Dojazd', 0)
+                                
+                                lessons.append({
+                                    'Data': current_day, 'Uczen_ID': uid, 'Stawka': full_rate, 
+                                    'Godzina': sch_row['Godzina'], 
+                                    'Imie': s_info['Imie'], 'Nazwisko': s_info['Nazwisko'],
+                                    'Typ': 'Stała', 'Czas': dur
+                                })
+                except: pass
+        current_day += timedelta(days=1)
+        
+    return lessons
+
+def calculate_predicted_income(df_students, start_date, end_date):
+    lessons = get_predicted_lessons(df_students, start_date, end_date)
     return sum(l['Stawka'] for l in lessons)
 
 def calculate_monthly_breakdown(df_students, student_id, target_month_date):
@@ -261,20 +324,20 @@ def calculate_monthly_breakdown(df_students, student_id, target_month_date):
     curr_start = date(y, m, 1)
     curr_end = curr_start + relativedelta(months=1) - timedelta(days=1)
     
-    # 1. PLAN BAZOWY NA TEN MIESIĄC (Z Harmonogramu)
     df_schedule = load_schedule()
-    # Filtrujemy harmonogram tylko dla tego ucznia
     student_schedule = df_schedule[df_schedule['Uczen_ID'] == student_id]
     
     lessons_count = 0
     base_cost_accumulated = 0.0
     day_ptr = curr_start
     
-    # Zbiór dni "Święto" (do odfiltrowania z bazy)
     df_cancel = load_cancellations()
     holidays_set = set()
     if not df_cancel.empty:
-        holiday_recs = df_cancel[(df_cancel['Uczen_ID'] == student_id) & (df_cancel['Powod'].astype(str).str.contains("Święto"))]
+        holiday_recs = df_cancel[
+            (df_cancel['Uczen_ID'] == student_id) & 
+            (df_cancel['Powod'].astype(str).str.contains("Święto|Edycja"))
+        ]
         for _, r in holiday_recs.iterrows(): holidays_set.add(str(r['Data']))
 
     while day_ptr <= curr_end:
@@ -288,7 +351,9 @@ def calculate_monthly_breakdown(df_students, student_id, target_month_date):
                         if s_od <= day_ptr <= s_do:
                             lessons_count += 1
                             dur = float(sch['Czas_trwania'])
-                            cost = (student_row['Stawka'] * dur) + student_row.get('Dojazd', 0)
+                            sch_rate = float(sch.get('Stawka', 0))
+                            hourly_rate = sch_rate if sch_rate > 0 else student_row['Stawka']
+                            cost = (hourly_rate * dur) + student_row.get('Dojazd', 0)
                             base_cost_accumulated += cost
                     except: pass
         day_ptr += timedelta(days=1)
@@ -302,46 +367,54 @@ def calculate_monthly_breakdown(df_students, student_id, target_month_date):
         "Typ": "Baza"
     })
     
-    # 2. KOREKTY (Dodatkowe, Odwołane)
-    query_start, query_end = curr_start, curr_end
+    query_start = curr_start
+    query_end = curr_end
     
-    # A) Dodatkowe
     df_extra = load_extra()
     if not df_extra.empty:
         extras = df_extra[(df_extra['Uczen_ID'] == student_id) & (pd.to_datetime(df_extra['Data']).dt.date >= query_start) & (pd.to_datetime(df_extra['Data']).dt.date <= query_end)]
         for _, row in extras.iterrows():
             typ = row.get('Typ', 'Dodatkowa')
             dur = row.get('Czas', 1.0)
-            kwota_do_sumy, kwota_disp, opis_typ = 0.0, 0.0, ""
+            
+            kwota_do_sumy = 0.0
+            kwota_do_wyswietlenia = 0.0
+            opis_typ = ""
             
             if typ == 'Dodatkowa':
-                kwota_disp = row['Stawka']
+                kwota_do_wyswietlenia = row['Stawka']
                 opis_typ = f"Płatna ekstra ({dur}h)"
-                if tryb == 'Miesięcznie': 
-                    kwota_do_sumy = 0.0; opis_typ += " (Osobna poz.)"
-                else: 
-                    kwota_do_sumy = row['Stawka']
+                if tryb == 'Miesięcznie': kwota_do_sumy = 0.0; opis_typ += " (Osobna poz.)"
+                else: kwota_do_sumy = row['Stawka']
+            
+            elif typ == 'Edytowana':
+                kwota_do_wyswietlenia = row['Stawka']
+                kwota_do_sumy = row['Stawka']
+                opis_typ = f"Zmiana w planie ({dur}h)"
+                
             elif typ in ['Odrabianie', 'Przełożona']:
-                if tryb == 'Co zajęcia': 
-                    kwota_do_sumy = row['Stawka']; kwota_disp = row['Stawka']; opis_typ = f"Odrabianie ({dur}h)"
-                else: 
-                    kwota_do_sumy = 0.0; kwota_disp = 0.0; opis_typ = f"Odrabianie - bez dopłaty ({dur}h)"
+                if tryb == 'Co zajęcia':
+                    kwota_do_sumy = row['Stawka']
+                    kwota_do_wyswietlenia = row['Stawka']
+                    opis_typ = f"Odrabianie ({dur}h)"
+                else:
+                    kwota_do_sumy = 0.0
+                    kwota_do_wyswietlenia = 0.0
+                    opis_typ = f"Odrabianie - bez dopłaty ({dur}h)"
             
             total_amount += kwota_do_sumy
-            breakdown.append({"Opis": f"{typ}: {row['Data']}", "Kwota": kwota_disp, "Typ": opis_typ})
+            breakdown.append({"Opis": f"{typ}: {row['Data']}", "Kwota": kwota_do_wyswietlenia, "Typ": opis_typ})
             
-    # B) Odwołane
     if not df_cancel.empty:
         cancels = df_cancel[(df_cancel['Uczen_ID'] == student_id) & (pd.to_datetime(df_cancel['Data']).dt.date >= query_start) & (pd.to_datetime(df_cancel['Data']).dt.date <= query_end)]
         for _, row in cancels.iterrows():
             powod = row.get('Powod', 'Nieznany')
-            if "Święto" in str(powod): continue
+            if "Święto" in str(powod) or "Edycja" in str(powod): continue
             
             if tryb == 'Miesięcznie':
                 kwota_cancel = 0.0
                 desc = f"Odwołana: {row['Data']} (Brak zwrotu)"
             else:
-                # Szacowanie kosztu odwołanej lekcji na podstawie HARMONOGRAMU
                 day_of_cancel = pd.to_datetime(row['Data']).weekday()
                 cost_of_lesson = 0.0
                 found = False
@@ -352,7 +425,9 @@ def calculate_monthly_breakdown(df_students, student_id, target_month_date):
                         target_d = pd.to_datetime(row['Data']).date()
                         if s_od <= target_d <= s_do:
                             dur = float(sch['Czas_trwania'])
-                            cost_of_lesson = (student_row['Stawka'] * dur) + student_row.get('Dojazd', 0)
+                            sch_rate = float(sch.get('Stawka', 0))
+                            hourly_rate = sch_rate if sch_rate > 0 else student_row['Stawka']
+                            cost_of_lesson = (hourly_rate * dur) + student_row.get('Dojazd', 0)
                             found = True
                             break
                 
@@ -381,17 +456,20 @@ def generate_calendar_events(df_students):
             start_time = datetime.combine(l['Data'], datetime.strptime(godzina_str, "%H:%M:%S").time())
             duration_hours = l.get('Czas', 1.0)
             end_time = start_time + timedelta(hours=duration_hours)
+            
             color = "#3788d8"
-            if l['Typ'] == 'Dodatkowa': color = "#28a745"
-            elif l['Typ'] == 'Odrabianie': color = "#fd7e14"
-            elif l['Typ'] == 'Przełożona': color = "#6f42c1"
+            typ = l['Typ']
+            if typ == 'Dodatkowa': color = "#28a745"
+            elif typ == 'Odrabianie': color = "#fd7e14"
+            elif typ == 'Przełożona': color = "#6f42c1"
+            elif typ == 'Edytowana': color = "#17a2b8" 
             
             events.append({
                 "title": f"{l['Imie']} {l['Nazwisko']}",
                 "start": start_time.isoformat(), "end": end_time.isoformat(),
                 "backgroundColor": color, "borderColor": color,
                 "extendedProps": {
-                    "Uczen_ID": l['Uczen_ID'], "Typ": l['Typ'], "Data": l['Data'].strftime("%Y-%m-%d"),
+                    "Uczen_ID": l['Uczen_ID'], "Typ": typ, "Data": l['Data'].strftime("%Y-%m-%d"),
                     "Godzina": str(l['Godzina']), "Stawka": l['Stawka'], "Imie": l['Imie'],
                     "Nazwisko": l['Nazwisko'], "Czas": duration_hours
                 }
@@ -406,7 +484,6 @@ df_cancellations = load_cancellations()
 df_extra = load_extra()
 df_schedule = load_schedule()
 
-# Wykonaj migrację jeśli harmonogram jest pusty
 if check_and_migrate_schedule(df):
     df_schedule = load_schedule()
 
@@ -421,31 +498,31 @@ with st.sidebar:
 # --- ZAKŁADKA KALENDARZ ---
 if menu == "📅 Kalendarz":
     st.header("Grafik Zajęć")
+    
     with st.expander("➕ Dodaj dodatkową lekcję / odrabianie"):
         student_opts = {f"{r['Imie']} {r['Nazwisko']}": r['ID'] for i, r in df.iterrows()}
         c1, c2 = st.columns(2)
         e_name = c1.selectbox("Kto?", list(student_opts.keys()), key="extra_who")
         e_id = student_opts[e_name]
         
-        # Pobieranie domyślnych danych z HARMONOGRAMU
+        s_row = df[df['ID'] == e_id].iloc[0]
         sched_rows = df_schedule[df_schedule['Uczen_ID'] == e_id]
         def_dur = 1.0
         if not sched_rows.empty:
             def_dur = float(sched_rows.iloc[0]['Czas_trwania'])
         else:
-            s_row = df[df['ID'] == e_id].iloc[0]
             try: def_dur = float(str(s_row.get('H_w_tygodniu', 1.0)).split(';')[0])
             except: pass
             
-        s_row = df[df['ID'] == e_id].iloc[0]
-        
         c3, c4 = st.columns(2)
         e_date = c3.date_input("Kiedy?", date.today(), key="extra_date")
         e_time = c4.time_input("O której?", time(17,0), key="extra_time")
         c5, c6 = st.columns(2)
         e_dur = c5.number_input("Czas trwania (h)", value=float(def_dur), step=0.25, key="extra_dur")
+        
         base_hourly = float(s_row['Stawka'])
         e_hourly = c6.number_input("Stawka (zł/h)", value=base_hourly, key="extra_hourly")
+        
         dojazd_koszt = float(s_row.get('Dojazd', 0))
         final_total = (e_hourly * e_dur) + dojazd_koszt
         st.caption(f"ℹ️ Wyliczenie: {e_hourly} zł/h × {e_dur}h + {dojazd_koszt} zł (dojazd) = **{final_total:.2f} zł**")
@@ -490,42 +567,72 @@ if menu == "📅 Kalendarz":
         with col1:
             st.info(f"Typ: {props['Typ']} | Czas: {props.get('Czas', 1.0)}h | Stawka: {props['Stawka']} zł")
         with col2:
-            st.write("")
-            if props['Typ'] == 'Stała':
-                powod_del = st.radio("Kto zawinił?", ["Wina Ucznia", "Wina Korepetytora", "Święto / Inne (Bez liczników)"], key="del_reason_click")
-                if st.button("❌ Odwołaj zajęcia"):
-                    nc = pd.DataFrame([{'Uczen_ID': props['Uczen_ID'], 'Data': props['Data'], 'Powod': powod_del}])
-                    df_cancellations = pd.concat([df_cancellations, nc], ignore_index=True)
-                    save_cancellations(df_cancellations)
-                    if "Święto" not in powod_del:
-                        idx = df.index[df['ID'] == props['Uczen_ID']].tolist()[0]
-                        duration_to_add = float(props.get('Czas', 1.0))
-                        if powod_del == "Wina Ucznia":
-                            df.at[idx, 'Nieobecnosci'] += 1
-                            df.at[idx, 'Odrabiania'] += 1
-                            df.at[idx, 'Do_odrobienia_nieumowione'] += duration_to_add
-                        else:
-                            df.at[idx, 'Do_odrobienia_nieumowione'] += duration_to_add
-                        save_data(df)
-                    st.success("Odwołano."); st.rerun()
-            else:
-                if st.button("🗑️ Usuń z kalendarza"):
-                    mask = (df_extra['Uczen_ID'] == props['Uczen_ID']) & (df_extra['Data'] == props['Data']) & (df_extra['Godzina'].astype(str).str.contains(str(props['Godzina'])[:5]))
-                    if mask.any():
-                        idx = df_extra[mask].index[0]
-                        if props['Typ'] == 'Odrabianie':
-                            s_idx = df.index[df['ID'] == props['Uczen_ID']].tolist()
-                            if s_idx:
-                                s_idx = s_idx[0]
-                                dur_to_rev = float(props.get('Czas', 1.0))
-                                if df.at[s_idx, 'Do_odrobienia_umowione'] >= dur_to_rev:
-                                    df.at[s_idx, 'Do_odrobienia_umowione'] -= dur_to_rev
-                                df.at[s_idx, 'Do_odrobienia_nieumowione'] += dur_to_rev 
-                                save_data(df)
-                                st.toast("Cofnięto status odrabiania (lekcja wróciła do puli nieumówionych).")
-                        df_extra = df_extra.drop(idx).reset_index(drop=True)
+            tab_edit, tab_del = st.tabs(["✏️ Edytuj", "🗑️ Usuń / Odwołaj"])
+            
+            with tab_edit:
+                c_e1, c_e2 = st.columns(2)
+                new_rate = c_e1.number_input("Nowa stawka (Total)", value=float(props['Stawka']))
+                new_dur = c_e2.number_input("Nowy czas (h)", value=float(props.get('Czas', 1.0)), step=0.25)
+                
+                if st.button("Zapisz zmiany"):
+                    if props['Typ'] == 'Stała':
+                        nc = pd.DataFrame([{
+                            'Uczen_ID': props['Uczen_ID'], 'Data': props['Data'], 'Powod': 'Edycja (Zmiana stawki)'
+                        }])
+                        df_cancellations = pd.concat([df_cancellations, nc], ignore_index=True)
+                        save_cancellations(df_cancellations)
+                        
+                        ne = pd.DataFrame([{
+                            'Uczen_ID': props['Uczen_ID'], 'Data': props['Data'], 'Godzina': props['Godzina'], 
+                            'Stawka': new_rate, 'Typ': 'Edytowana', 'Czas': new_dur, 'Status': 'Zaplanowana'
+                        }])
+                        df_extra = pd.concat([df_extra, ne], ignore_index=True)
                         save_extra(df_extra)
-                    st.success("Usunięto."); st.rerun()
+                    else:
+                        mask = (df_extra['Uczen_ID'] == props['Uczen_ID']) & (df_extra['Data'] == props['Data']) & (df_extra['Godzina'].astype(str).str.contains(str(props['Godzina'])[:5]))
+                        if mask.any():
+                            idx = df_extra[mask].index[0]
+                            df_extra.at[idx, 'Stawka'] = new_rate
+                            df_extra.at[idx, 'Czas'] = new_dur
+                            save_extra(df_extra)
+                    st.success("Zapisano!"); st.rerun()
+
+            with tab_del:
+                if props['Typ'] == 'Stała':
+                    powod_del = st.radio("Kto zawinił?", ["Wina Ucznia", "Wina Korepetytora", "Święto / Inne (Bez liczników)"], key="del_reason_click")
+                    if st.button("❌ Odwołaj zajęcia"):
+                        nc = pd.DataFrame([{'Uczen_ID': props['Uczen_ID'], 'Data': props['Data'], 'Powod': powod_del}])
+                        df_cancellations = pd.concat([df_cancellations, nc], ignore_index=True)
+                        save_cancellations(df_cancellations)
+                        if "Święto" not in powod_del:
+                            idx = df.index[df['ID'] == props['Uczen_ID']].tolist()[0]
+                            duration_to_add = float(props.get('Czas', 1.0))
+                            if powod_del == "Wina Ucznia":
+                                df.at[idx, 'Nieobecnosci'] += 1
+                                df.at[idx, 'Odrabiania'] += 1
+                                df.at[idx, 'Do_odrobienia_nieumowione'] += duration_to_add
+                            else:
+                                df.at[idx, 'Do_odrobienia_nieumowione'] += duration_to_add
+                            save_data(df)
+                        st.success("Odwołano."); st.rerun()
+                else:
+                    if st.button("🗑️ Usuń z kalendarza"):
+                        mask = (df_extra['Uczen_ID'] == props['Uczen_ID']) & (df_extra['Data'] == props['Data']) & (df_extra['Godzina'].astype(str).str.contains(str(props['Godzina'])[:5]))
+                        if mask.any():
+                            idx = df_extra[mask].index[0]
+                            if props['Typ'] == 'Odrabianie':
+                                s_idx = df.index[df['ID'] == props['Uczen_ID']].tolist()
+                                if s_idx:
+                                    s_idx = s_idx[0]
+                                    dur_to_rev = float(props.get('Czas', 1.0))
+                                    if df.at[s_idx, 'Do_odrobienia_umowione'] >= dur_to_rev:
+                                        df.at[s_idx, 'Do_odrobienia_umowione'] -= dur_to_rev
+                                    df.at[s_idx, 'Do_odrobienia_nieumowione'] += dur_to_rev 
+                                    save_data(df)
+                                    st.toast("Cofnięto status odrabiania.")
+                            df_extra = df_extra.drop(idx).reset_index(drop=True)
+                            save_extra(df_extra)
+                        st.success("Usunięto."); st.rerun()
 
 elif menu == "👤 Szczegóły Ucznia":
     st.header("Karta Ucznia")
@@ -539,22 +646,27 @@ elif menu == "👤 Szczegóły Ucznia":
         tryb = student_row.get('Tryb_platnosci', 'Co zajęcia')
         
         st.markdown("---")
-        with st.expander("📅 Historia i Zmiany Planu (Harmonogram)", expanded=True):
+        with st.expander("📅 Historia i Zmiany Planu (Harmonogram)"):
             st.caption("Tutaj możesz zmienić dzień/godzinę zajęć w czasie.")
             s_sch = df_schedule[df_schedule['Uczen_ID'] == selected_id].copy()
-            c_h1, c_h2, c_h3, c_h4, c_h5, c_h6 = st.columns([2, 2, 1.5, 2, 2, 1])
+            c_h1, c_h2, c_h3, c_h4, c_h5, c_h6, c_h7 = st.columns([2, 2, 1.5, 1.5, 2, 2, 1])
             new_day = c_h1.selectbox("Dzień", list(DNI_MAPA.keys()), key="ns_d")
             new_hour = c_h2.time_input("Godz", time(16,0), key="ns_t")
             new_dur = c_h3.number_input("h", 0.5, 3.0, 1.0, 0.25, key="ns_dur")
-            new_start = c_h4.date_input("Od", date.today(), key="ns_od")
-            new_end = c_h5.date_input("Do", date(2026, 6, 26), key="ns_do")
-            if c_h6.button("➕", help="Dodaj nowy okres"):
-                new_sch_entry = pd.DataFrame([{'Uczen_ID': selected_id, 'Dzien_tyg': new_day, 'Godzina': new_hour, 'Czas_trwania': new_dur, 'Data_od': new_start, 'Data_do': new_end}])
+            new_rate_val = float(student_row['Stawka'])
+            new_rate = c_h4.number_input("Stawka", value=new_rate_val, key="ns_rate")
+            new_start = c_h5.date_input("Od", date.today(), key="ns_od")
+            new_end = c_h6.date_input("Do", date(2026, 6, 26), key="ns_do")
+            if c_h7.button("➕", help="Dodaj nowy okres"):
+                new_sch_entry = pd.DataFrame([{
+                    'Uczen_ID': selected_id, 'Dzien_tyg': new_day, 'Godzina': new_hour, 
+                    'Czas_trwania': new_dur, 'Data_od': new_start, 'Data_do': new_end,
+                    'Stawka': new_rate
+                }])
                 df_schedule = pd.concat([df_schedule, new_sch_entry], ignore_index=True)
                 save_schedule(df_schedule); st.rerun()
             
             if not s_sch.empty:
-                # --- FIX: Konwersja typów dla st.data_editor ---
                 try: s_sch['Godzina'] = pd.to_datetime(s_sch['Godzina'].astype(str)).dt.time
                 except: pass
                 try: 
@@ -569,6 +681,7 @@ elif menu == "👤 Szczegóły Ucznia":
                         "Dzien_tyg": st.column_config.SelectboxColumn("Dzień", options=list(DNI_MAPA.keys()), required=True),
                         "Godzina": st.column_config.TimeColumn("Godzina", required=True),
                         "Czas_trwania": st.column_config.NumberColumn("Czas (h)", min_value=0.5, max_value=4.0, step=0.25),
+                        "Stawka": st.column_config.NumberColumn("Stawka (zł/h)", min_value=0.0, step=5.0),
                         "Data_od": st.column_config.DateColumn("Od", required=True),
                         "Data_do": st.column_config.DateColumn("Do", required=True)
                     },
@@ -605,6 +718,8 @@ elif menu == "👤 Szczegóły Ucznia":
         if not saved_for_student.empty: saved_for_student = saved_for_student.set_index('Okres')
         
         table_data = []
+        details_map = {}
+
         if tryb == "Miesięcznie":
             curr = start_date.replace(day=1)
             view_limit = (date.today().replace(day=1) + relativedelta(months=1)) - timedelta(days=1)
@@ -612,6 +727,8 @@ elif menu == "👤 Szczegóły Ucznia":
             while curr <= view_limit:
                 m_str = curr.strftime("%Y-%m")
                 calc_amount, details = calculate_monthly_breakdown(df, selected_id, curr)
+                details_map[m_str] = details
+                final_req = float(calc_amount)
                 paid_val = 0.0
                 if not saved_for_student.empty and m_str in saved_for_student.index:
                     record = saved_for_student.loc[m_str]
@@ -698,7 +815,11 @@ elif menu == "💰 Finanse (Wykres)":
         today = date.today()
         start_year = date(today.year if today.month >= 9 else today.year - 1, 9, 1)
         end_year = date(today.year + 1 if today.month >= 9 else today.year, 6, 30)
-        income_total = calculate_income(df, start_year, end_year)
+        
+        # income_total = calculate_predicted_income(df, start_year, end_year)
+        # Using calculate_predicted_income now for prediction consistency
+        income_total = calculate_predicted_income(df, start_year, end_year)
+        
         paid_total = df_settlements['Wplacono'].sum()
         c1, c2 = st.columns(2)
         c1.metric("Przychód Przewidywany (Rok)", f"{income_total:.2f} PLN")
@@ -716,7 +837,10 @@ elif menu == "💰 Finanse (Wykres)":
             nm = curr + relativedelta(months=1)
             e_m = nm - timedelta(days=1)
             month_key = curr.strftime("%Y-%m")
-            val_pred = calculate_income(df, curr, e_m)
+            
+            # Using calculate_predicted_income for charts as well
+            val_pred = calculate_predicted_income(df, curr, e_m)
+            
             val_real = real_income_map.get(month_key, 0.0)
             label = f"{MIESIACE_PL.get(curr.month)} {curr.year}"
             chart_data.append({"Miesiąc": label, "Przewidywany": val_pred, "Rzeczywisty": val_real, "SortKey": month_key})
@@ -730,7 +854,7 @@ elif menu == "💰 Finanse (Wykres)":
         st.altair_chart(c, use_container_width=True)
 
         st.divider()
-        st.subheader("📊 Szczegółowy Raport Miesięczny")
+        st.subheader("📊 Raport Miesięczny")
         months_options = [d['Miesiąc'] for d in chart_data]
         if months_options:
             curr_month_str = f"{MIESIACE_PL[today.month]} {today.year}"
@@ -747,7 +871,10 @@ elif menu == "💰 Finanse (Wykres)":
             if target_report_date:
                 r_start = target_report_date.replace(day=1)
                 r_end = r_start + relativedelta(months=1) - timedelta(days=1)
-                lessons_report = get_lessons_in_period(df, r_start, r_end)
+                
+                # Use get_predicted_lessons for Plan report
+                lessons_report = get_predicted_lessons(df, r_start, r_end)
+                
                 plan_total, plan_monthly, plan_single, plan_tuition, plan_travel = 0, 0, 0, 0, 0
                 student_plan_total, student_plan_travel = {}, {}
                 
@@ -829,7 +956,10 @@ elif menu == "💰 Finanse (Wykres)":
             sel_q_data = next(q for q in quarter_options if q['Label'] == sel_q_label)
             if sel_q_data:
                 q_start, q_end = sel_q_data['Start'], sel_q_data['End']
-                q_lessons_report = get_lessons_in_period(df, q_start, q_end)
+                
+                # Use get_predicted_lessons for Plan report
+                q_lessons_report = get_predicted_lessons(df, q_start, q_end)
+                
                 q_plan_total, q_plan_monthly, q_plan_single, q_plan_tuition, q_plan_travel = 0, 0, 0, 0, 0
                 q_student_plan_total, q_student_plan_travel = {}, {}
                 for l in q_lessons_report:
@@ -902,7 +1032,7 @@ elif menu == "➕ Dodaj Ucznia":
         c_cont1, c_cont2 = st.columns(2)
         nr_tel, adres = c_cont1.text_input("Numer telefonu"), c_cont2.text_input("Adres")
         c_sch1, c_sch2, c_sch3 = st.columns(3)
-        szkola, klasa, poziom = c_sch1.text_input("Szkoła"), c_sch2.text_input("Klasa"), c_sch3.selectbox("Poziom", ["Podstawowy", "Rozszerzony", "Inny"])
+        szkola, klasa, poziom = c_sch1.selectbox("Szkoła", ["Podstawowa", "Liceum", "Technikum"]), c_sch2.text_input("Klasa"), c_sch3.selectbox("Poziom", ["Podstawowy", "Rozszerzony"])
         st.markdown("---")
         c3, c4, c5 = st.columns(3)
         data_rozp, data_zak = c3.date_input("Start", date.today()), c4.date_input("Koniec", date(2026, 6, 26))
@@ -931,7 +1061,7 @@ elif menu == "➕ Dodaj Ucznia":
                 new_sch_rows = []
                 terms = parse_student_terms(pd.Series(new_row))
                 for t in terms:
-                    new_sch_rows.append({'Uczen_ID': new_id, 'Dzien_tyg': t['day_name'], 'Godzina': t['time_str'], 'Czas_trwania': t['duration'], 'Data_od': data_rozp, 'Data_do': data_zak})
+                    new_sch_rows.append({'Uczen_ID': new_id, 'Dzien_tyg': t['day_name'], 'Godzina': t['time_str'], 'Czas_trwania': t['duration'], 'Data_od': data_rozp, 'Data_do': data_zak, 'Stawka': stawka})
                 if new_sch_rows:
                     df_schedule_new = pd.DataFrame(new_sch_rows)
                     df_sch_curr = load_schedule()

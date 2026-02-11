@@ -5,3 +5,7 @@ Uczen_ID,Data,Godzina,Stawka,Typ,Czas,Status
 6,2025-11-08,10:00:00,80.0,Dodatkowa,1.0,Zaplanowana
 7,2025-10-25,11:00:00,80.0,Dodatkowa,1.0,Zaplanowana
 7,2025-12-20,10:00:00,80.0,Dodatkowa,1.0,Zaplanowana
+11,2026-02-23,16:00:00,100.0,Odrabianie,1.0,Zaplanowana
+10,2025-12-12,15:00:00,120.0,Edytowana,1.5,Zaplanowana
+9,2025-12-12,16:30:00,120.0,Edytowana,1.5,Zaplanowana
+16,2025-10-18,13:15:00,140.0,Edytowana,1.25,Zaplanowana
