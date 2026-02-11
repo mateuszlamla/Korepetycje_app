@@ -14,6 +14,8 @@ conn = st.connection(
     key=st.secrets["connections"]["supabase"]["key"]
 )
 
+conn.client.options.http_client_timeout = 10
+
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Menedżer Korepetycji", layout="wide", page_icon="📚")
 
