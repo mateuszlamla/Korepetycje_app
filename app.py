@@ -20,7 +20,7 @@ def get_supabase_client():
     
     return create_client(url, key, options=opts)
 
-supabase = get_supabase_client()
+supabase_client = get_supabase_client()
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Menedżer Korepetycji", layout="wide", page_icon="📚")
