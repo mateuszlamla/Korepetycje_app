@@ -1,5 +1,0 @@
-            kalendarz
-potwierdzanie platnosci (miesieczne, co zajecia)
-obliczanie dochodu przewidywanego (miesieczne, roczne)
-obliczanie dochodu realnego (miesieczne, roczne)
-sprawdzenie przekroczenia limitu dochodu na umowie (kwartalnie)

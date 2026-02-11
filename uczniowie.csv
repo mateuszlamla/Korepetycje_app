@@ -1,3 +1,15 @@
-ID,Imie,Nazwisko,H_w_tygodniu,Stawka,Nieobecnosci,Odrabiania,Do_odrobienia_umowione,Do_odrobienia_nieumowione,Szkola,Klasa,Poziom,Nr_tel,Data_rozp,Data_zak,Dzien_tyg,Godzina,Adres,Tryb_platnosci
-1,Mateusz,Lamla,1,80,0,0.0,0.0,0.0,Technikum,5.0,Rozszerzony,123456789.0,2025-09-01,2026-05-01,Wtorek,17:00:00,abc,Co zajęcia
-2,Marek,asd,1,80,0,0.0,,,,,,,2026-02-09,2026-06-26,Poniedziałek,16:00:00,,Miesięcznie
+ID,Imie,Nazwisko,H_w_tygodniu,Stawka,Dojazd,Nieobecnosci,Odrabiania,Do_odrobienia_umowione,Do_odrobienia_nieumowione,Szkola,Klasa,Poziom,Nr_tel,Data_rozp,Data_zak,Dzien_tyg,Godzina,Adres,Tryb_platnosci
+1,Kacper,Romanowski,1.0,50,0,0,0,0,0,Podstawowa,6,Podstawowy,-,2025-09-01,2026-06-26,Czwartek,15:00:00,-,Co zajęcia
+2,Aleksander,Palusiński,1.0,80,0,0,0,0,0,Technikum,3,Rozszerzony,503 087 042,2025-09-01,2026-06-26,Wtorek,20:00:00,"Gierałtowice, Jojki 11",Co zajęcia
+3,Miłosz,Zalewski,1.0,80,20,0,0,0,0,Podstawowa,8,Podstawowy,601 451 935,2025-09-01,2026-06-26,Wtorek,18:45:00,"Chudów, Wolności 1D",Co zajęcia
+4,Julia,Zopołka,1.0,70,5,0,0,0,0,Technikum,4,Podstawowy,503 657 303,2025-09-01,2026-06-26,Czwartek,16:30:00,"Ornontowice, Marzankowice 20",Co zajęcia
+5,Jagoda,Zopołka,1.0,70,5,0,0,0,0,Liceum,3,Rozszerzony,503 657 303,2025-09-01,2026-06-26,Czwartek,17:30:00,"Ornontowice, Marzankowice 20",Co zajęcia
+6,Tomasz,Ogrodniczuk,1.0,80,0,0,0,0,0,Podstawowa,7,Podstawowy,697 593 232,2025-09-01,2026-06-26,Czwartek,18:45:00,-,Co zajęcia
+7,Jakub,Partuś,1.0,80,0,0,0,0,0,Liceum,3,Podstawowy,514 550 309,2025-09-01,2026-06-26,Środa,19:00:00,"Gierałtowice, Stachury 8A",Co zajęcia
+8,Zuzanna,Zacny,1.0,80,30,0,0,0,0,Technikum,5,Podstawowy,726 031 082,2025-09-01,2026-04-30,Poniedziałek,16:30:00,"Czerwionka-Leszczyny, Głowackiego 5/2/4",Miesięcznie
+9,Olga,Chryczyk,1.5,80,15,0,0,0,0,Technikum,5,Podstawowy,511 131 151,2025-08-01,2026-04-30,Piątek,17:00:00,"Książenice, Klimka 40C",Miesięcznie
+10,Anna,Chryczyk,1.5,80,15,0,0,0,0,Liceum,4,Rozszerzony,511 131 151,2025-08-01,2026-04-30,Piątek,15:30:00,"Książenice, Klimka 40C",Miesięcznie
+11,Laura,Tomaszewska,1.0,80,20,0,0,0,0,Liceum,4,Podstawowy,796 861 820,2025-09-01,2026-04-30,Poniedziałek,15:00:00,"Mikołów, Ziołowa 5",Miesięcznie
+12,Wojciech,Kudłacz,1.0,80,0,0,0,0,0,Podstawowa,8,Podstawowy,570 912 909,2025-09-01,2026-06-26,Środa,18:00:00,-,Miesięcznie
+13,Filip,Nowak,1.0,80,30,0,0,0,0,Technikum,5,Rozszerzony,531 150 496,2025-09-01,2026-04-30,Poniedziałek,17:45:00,"Czerwionka-Leszczyny, Malczyka 15",Miesięcznie
+14,Zuzanna,Czech,1.0,85,5,0,0,0,0,Liceum,3,Podstawowy,530 107 139,2026-02-10,2026-06-26,Wtorek,17:30:00,"Gierałtowice, Powstańców Śl. 66",Miesięcznie

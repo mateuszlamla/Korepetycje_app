@@ -1,2 +1,7 @@
-Uczen_ID,Data,Godzina,Stawka,Typ
-1,2026-02-17,17:00:00,80,Przełożona
+Uczen_ID,Data,Godzina,Stawka,Typ,Czas,Status
+14,2026-02-10,17:30:00,90.0,Dodatkowa,1.0,Zaplanowana
+1,2025-09-30,14:45:00,50.0,Dodatkowa,1.0,Zaplanowana
+2,2026-02-06,15:30:00,80.0,Dodatkowa,1.0,Zaplanowana
+6,2025-11-08,10:00:00,80.0,Dodatkowa,1.0,Zaplanowana
+7,2025-10-25,11:00:00,80.0,Dodatkowa,1.0,Zaplanowana
+7,2025-12-20,10:00:00,80.0,Dodatkowa,1.0,Zaplanowana
