@@ -83,6 +83,11 @@ def clear_cache():
     """Czyści pamięć podręczną po zapisie danych, żeby widzieć zmiany od razu"""
     st.cache_data.clear()
 
+def clean_df_for_supabase(df):
+    """Zamienia wartości NaN na None, aby uniknąć błędu JSON w Supabase."""
+    return df.where(pd.notnull(df), None)
+# ------------------------
+
 @st.cache_data(ttl=60)
 def load_data():
     try:
@@ -101,7 +106,9 @@ def load_data():
         return pd.DataFrame(columns=COLUMNS)
 
 def save_data(df):
-    data = df.to_dict(orient='records')
+    # ZMIANA TUTAJ: Czyszczenie danych przed zapisem
+    df_clean = clean_df_for_supabase(df)
+    data = df_clean.to_dict(orient='records')
     supabase.table("uczniowie").upsert(data).execute()
     clear_cache()
 
@@ -113,7 +120,9 @@ def load_settlements():
     except: return pd.DataFrame(columns=COLUMNS_SETTLEMENTS)
 
 def save_settlements(df):
-    supabase.table("rozliczenia").upsert(df.to_dict(orient='records')).execute()
+    # ZMIANA TUTAJ
+    df_clean = clean_df_for_supabase(df)
+    supabase.table("rozliczenia").upsert(df_clean.to_dict(orient='records')).execute()
     clear_cache()
 
 @st.cache_data(ttl=60)
@@ -124,7 +133,9 @@ def load_cancellations():
     except: return pd.DataFrame(columns=COLUMNS_CANCELLATIONS)
 
 def save_cancellations(df):
-    supabase.table("odwolane").upsert(df.to_dict(orient='records')).execute()
+    # ZMIANA TUTAJ (To naprawia Twój konkretny błąd z logów)
+    df_clean = clean_df_for_supabase(df)
+    supabase.table("odwolane").upsert(df_clean.to_dict(orient='records')).execute()
     clear_cache()
 
 @st.cache_data(ttl=60)
@@ -135,7 +146,9 @@ def load_extra():
     except: return pd.DataFrame(columns=COLUMNS_EXTRA)
 
 def save_extra(df):
-    supabase.table("dodatkowe").upsert(df.to_dict(orient='records')).execute()
+    # ZMIANA TUTAJ
+    df_clean = clean_df_for_supabase(df)
+    supabase.table("dodatkowe").upsert(df_clean.to_dict(orient='records')).execute()
     clear_cache()
 
 @st.cache_data(ttl=60)
@@ -146,7 +159,9 @@ def load_schedule():
     except: return pd.DataFrame(columns=COLUMNS_SCHEDULE)
 
 def save_schedule(df):
-    supabase.table("harmonogram").upsert(df.to_dict(orient='records')).execute()
+    # ZMIANA TUTAJ
+    df_clean = clean_df_for_supabase(df)
+    supabase.table("harmonogram").upsert(df_clean.to_dict(orient='records')).execute()
     clear_cache()
 
 # --- LOGIKA POMOCNICZA ---
